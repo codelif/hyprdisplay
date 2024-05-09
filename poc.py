@@ -17,14 +17,14 @@ default_config = {
             "name": "HDMI-1",
             "res": (1280, 720),
             "scale": 2 / 3,
-            "pos": (0, -1080),
+            "pos": (1280, -1000),
             "primary": False,
         },
         "mon-3": {
             "name": "HDMI-2",
             "res": (3840, 2160),
             "scale": 2,
-            "pos": (1920, -500),
+            "pos": (1280, 0),
             "primary": False,
         },
     },
@@ -44,7 +44,7 @@ def generate_monitors(config: dict):
     pres = [int(i / pscale) for i in primary["res"]]
 
     # Global Pixels per Cell ratio, calculated with primary display resolution as reference.
-    global_ppc = (pres[0] // 30, pres[1] // 10)
+    global_ppc = (pres[0] // 24, pres[1] // 8)
     primary_lines = pres[1] // global_ppc[1]
     primary_cols = pres[0] // global_ppc[0]
     origin = ((curses.LINES - primary_lines) // 2, (curses.COLS - primary_cols) // 2)
@@ -61,8 +61,8 @@ def generate_monitors(config: dict):
         disp_lines = int((disp["res"][1] / disp["scale"]) / global_ppc[1])
         disp_cols = int((disp["res"][0] / disp["scale"]) / global_ppc[0])
         mon = Monitor(
-            origin[0] + (disp["pos"][1] // global_ppc[1]),
-            origin[1] + (disp["pos"][0] // global_ppc[0]),
+            origin[0] + ((disp["pos"][1] - primary["pos"][1]) // global_ppc[1]),
+            origin[1] + ((disp["pos"][0] - primary["pos"][0]) // global_ppc[0]),
             disp_lines,
             disp_cols,
             disp,
