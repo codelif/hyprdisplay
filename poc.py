@@ -1,14 +1,14 @@
 import curses
 import curses.ascii
 from curses.textpad import rectangle
-from typing import Tuple
+from typing import List, Self
 
 
 default_config = {
     "displays": {
         "mon-1": {
             "name": "eDP-1",
-            "res": (1920, 1080),
+            "res": (1280, 720),
             "scale": 1,
             "pos": (0, 0),
             "primary": True,
@@ -23,7 +23,7 @@ default_config = {
         "mon-3": {
             "name": "HDMI-2",
             "res": (3840, 2160),
-            "scale": 1,
+            "scale": 2,
             "pos": (1920, -500),
             "primary": False,
         },
@@ -53,9 +53,8 @@ def generate_monitors(config: dict):
         origin[1],
         primary_lines,
         primary_cols,
+        primary,
     )
-
-    primary_monitor.refresh()
 
     mon_objs = []
     for disp in rest:
@@ -66,15 +65,25 @@ def generate_monitors(config: dict):
             origin[1] + (disp["pos"][0] // global_ppc[0]),
             disp_lines,
             disp_cols,
+            disp,
         )
 
-        mon.refresh()
         mon_objs.append(mon)
 
-    return primary_monitor, mon_objs
+    return primary_monitor, mon_objs, global_ppc
 
 
 def main(stdscr: curses.window):
+    MOVE_KEYS = [
+        curses.KEY_UP,
+        curses.KEY_DOWN,
+        curses.KEY_LEFT,
+        curses.KEY_RIGHT,
+        ord("k"),
+        ord("j"),
+        ord("h"),
+        ord("l"),
+    ]
     curses.set_escdelay(25)
     curses.curs_set(0)
 
@@ -83,28 +92,10 @@ def main(stdscr: curses.window):
     stdscr.refresh()
     curses.use_default_colors()
 
-    mon1, wow = generate_monitors(default_config)
-
-    # MON_LINES = 10
-    # MON_COLS = 30
-    # mon1 = Monitor(
-    #     (curses.LINES - MON_LINES) // 2,
-    #     (curses.COLS - MON_COLS) // 2,
-    #     MON_LINES,
-    #     MON_COLS,
-    # )
-    mon1.refresh()
+    mon1, wow, ppc = generate_monitors(default_config)
+    refreshall(stdscr, mon1, *wow)
     while (ch := stdscr.getch()) not in [curses.ascii.ESC, ord("q")]:
-        if ch in [
-            curses.KEY_UP,
-            curses.KEY_DOWN,
-            curses.KEY_LEFT,
-            curses.KEY_RIGHT,
-            ord("k"),
-            ord("j"),
-            ord("h"),
-            ord("l"),
-        ]:
+        if ch in MOVE_KEYS:
             if ch in [curses.KEY_UP, ord("k")]:
                 mon1.move_rel(-1, 0)
             elif ch in [curses.KEY_DOWN, ord("j")]:
@@ -115,11 +106,15 @@ def main(stdscr: curses.window):
                 mon1.move_rel(0, 2)
 
         stdscr.clear()
-        status = f"({curses.LINES}, {curses.COLS}) ({mon1.posy}, {mon1.posx}) ({mon1.sizey}, {mon1.sizex})"
+        status = f"({curses.LINES}, {curses.COLS}) ({mon1.posy}, {mon1.posx}) ({ppc[0]}, {ppc[1]})"
         stdscr.addstr(curses.LINES - 1, curses.COLS - len(status) - 1, status)
+        # stdscr.addstr(0, 0, "Collision List:")
+        # for i, mon in enumerate(wow, start=1):
+        #     stdscr.addstr(i, 0, f"{mon.config['name']}: {mon1.is_colliding_with(mon)}")
+
         refreshall(stdscr, mon1, *wow)
 
-    stdscr.getch()
+    return calculate_config(mon1, wow, ppc)
 
 
 def refreshall(*wins):
@@ -130,12 +125,14 @@ def refreshall(*wins):
 
 
 class Monitor:
-    def __init__(self, posy, posx, sizey, sizex) -> None:
-        self.posy = posy
-        self.posx = posx
+    def __init__(
+        self, posy: int, posx: int, sizey: int, sizex: int, config: dict
+    ) -> None:
         self.sizey = sizey
         self.sizex = sizex
+        self.__set_pos(posy, posx)
         self.window = curses.newpad(sizey + 1, sizex + 1)
+        self.config = config
         self.redraw()
 
     def refresh(self):
@@ -157,6 +154,12 @@ class Monitor:
 
     def redraw(self):
         rectangle(self.window, 0, 0, self.sizey - 1, self.sizex - 1)
+        self.add_text(self.config["name"])
+
+    def add_text(self, text: str):
+        line = (self.sizey - 1) // 2
+        col = (self.sizex - len(text)) // 2
+        self.window.addstr(line, col, text)
 
     def __bounded_pos(self, posy, posx):
         if posy < 0:
@@ -171,18 +174,61 @@ class Monitor:
 
         return posy, posx
 
+    def __set_pos(self, posy: int, posx: int):
+        self.posy = posy
+        self.posx = posx
+
+        self.miny = self.posy
+        self.maxy = self.posy + self.sizey
+
+        self.minx = self.posx
+        self.maxx = self.posx + self.sizex
+
     def move_abs(self, posy, posx):
-        self.posy, self.posx = self.__bounded_pos(posy, posx)
+        self.__set_pos(*self.__bounded_pos(posy, posx))
 
     def move_rel(self, rely, relx):
         new_posy = self.posy + rely
         new_posx = self.posx + relx
 
-        self.posy, self.posx = self.__bounded_pos(new_posy, new_posx)
+        self.__set_pos(*self.__bounded_pos(new_posy, new_posx))
+
+    def is_inside(self, y: int, x: int) -> bool:
+        in_row_segment = self.posy <= y <= self.posy + self.sizey
+        in_cols_segment = self.posx <= x <= self.posx + self.sizex
+
+        return in_row_segment and in_cols_segment
+
+    def is_colliding_with(self, mon: Self) -> bool:
+        # Using AABB as all displays are rectanges and are only rotated in 90° (atleast according to hyprland)
+        # https://en.wikipedia.org/wiki/Minimum_bounding_box#Axis-aligned_minimum_bounding_box
+        return (
+            (self.minx < mon.maxx)
+            and (self.maxx > mon.minx)
+            and (self.miny < mon.maxy)
+            and (self.maxy > mon.miny)
+        )
+
+
+def calculate_config(primary: Monitor, rest: List[Monitor], ppc):
+    template = "monitor = {name},preferred,{x},{y}"
+    configs = []
+
+    configs.append(template.format(name=primary.config["name"], x=0, y=0))
+
+    for mon in rest:
+        name = mon.config["name"]
+        x = (mon.posx - primary.posx) * ppc[1]
+        y = (mon.posy - primary.posy) * ppc[0]
+        configs.append(template.format(name=name, x=x, y=y))
+
+    return configs
 
 
 if __name__ == "__main__":
     from pprint import pprint
 
-    curses.wrapper(main)
+    configs = curses.wrapper(main)
+
+    print(*configs, sep="\n")
     # generate_monitors(default_conf g)
