@@ -1,5 +1,5 @@
 # hyprdisplay
-hyprdisplay is a ncurses utility to manage your display layouts and settings in hyprland. 
+hyprdisplay is a terminal application to manage your display layouts and settings in hyprland. 
 
 ## POC
 The POC is in written in python (because its faster for me to write in). But ultimately this will be written in GO. 
